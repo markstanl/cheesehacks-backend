@@ -6,6 +6,7 @@ from pydantic import BaseModel
 from typing import Optional, Any
 
 import db
+import interfaceMLP
 
 # --- Dependencies ---
 
@@ -181,7 +182,6 @@ async def submit_quiz(
     user_id: str = Depends(get_current_user_id),
 ):
     """Submit batch of quiz responses: format each, send to MLP, update personality vector."""
-    import interfaceMLP
     pairs = []
     for item in body.responses:
         q = db.get_question_to_return(item.questionId) or db.get_cached_question(item.questionId)

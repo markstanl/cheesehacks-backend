@@ -10,6 +10,28 @@ from typing import Any
 
 import db
 
+import torch
+from model import SharedEncoderBinaryHeads
+from sentence_transformers import SentenceTransformer
+from huggingface_hub import hf_hub_download
+
+def load_mlp_model(checkpoint_path: str = None) -> SharedEncoderBinaryHeads:
+    """
+    Load the MLP model from a checkpoint path.
+    """
+    if checkpoint_path:
+        checkpoint = torch.load(checkpoint_path, map_location="cpu")
+        model = SharedEncoderBinaryHeads(input_dim=checkpoint['input_dim'], latent_dim=checkpoint['latent_dim'], tasks=checkpoint['tasks'])
+        model.load_state_dict(checkpoint["model_state"], strict=True)
+    model.eval()
+    return model
+
+model_path = hf_hub_download(
+    repo_id="Praneet-P/ethics-multihead-model",
+    filename="checkpoints/shared_encoder_heads.pt"
+)
+inference_model = load_mlp_model(model_path)
+embedder = SentenceTransformer("BAAI/bge-base-en-v1.5", device=str(torch.device("cuda" if torch.cuda.is_available() else "cpu")))
 
 # --- Question types (match routes.py) ---
 # 0 = single select, 1 = multi-select, 2 = scale, 3 = free text, 4 = ranking, 5 = yes/no, 6 = other
@@ -91,15 +113,33 @@ def _call_mlp(personality_vector: list[float], response_strings: list[str]) -> l
     return the updated personality vector.
     Replace with real HTTP/gRPC call to your ML service.
     """
-    # Stub: return same vector (or a copy so caller can mutate)
+    inference_model.eval()
+
+    with torch.no_grad():
+        combined = " ".join(response_strings)
+        # run the sentence encoder
+        emb = embedder.encode(
+            combined,
+            batch_size=1,
+            normalize_embeddings=True,
+            convert_to_tensor=True,
+            show_progress_bar=False,
+        )
+
+        # run the MLP model
+        personality_vector = torch.tensor(personality_vector, dtype=torch.float32).unsqueeze(0)
+
     return list(personality_vector)
 
 
 def get_question_from_mlp(question_id: int) -> dict[str, Any] | None:
     """
-    Stub: call the MLP to get a new question by id. Returns the question in standard format:
-    { "id": int, "question_type": int, "question": { "number": int, "text": str }, "answers": [ { "id": int, "text": str } ] }
-    or None if the MLP has no question for this id. Replace with real HTTP/gRPC call to your ML question service.
+    Stub: call the MLP to get a new question by id. Returns the question in
+    standard format:
+    { "id": int, "question_type": int, "question": { "number": int,
+    "text": str }, "answers": [ { "id": int, "text": str } ] }
+    or None if the MLP has no question for this id.
+    Replace with real HTTP/gRPC call to your ML question service.
     """
     # Stub: return None so caller can fall back to cache/404; replace with actual MLP call
     return None
