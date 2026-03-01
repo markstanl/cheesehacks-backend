@@ -214,7 +214,7 @@ Provide 2 to 5 short answer options. The question should make people think about
         return {
             "id": question_id,
             "question_type": 5,
-            "question": {"number": 1, "text": f"In a {m} mood, consider: What matters more—{t.replace(' and ', ' or ')}?"},
+            "question": {"number": 1, "text": f"In a {m} mood, consider: What matters more: {t.replace(' and ', ' or ')}?"},
             "answers": [{"id": 0, "text": "Yes"}, {"id": 1, "text": "No"}],
         }
 
