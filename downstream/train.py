@@ -67,7 +67,7 @@ def train(
     else:
         raise ValueError(f"Unsupported dataset: {dataset_name}")
 
-    in_features = 384
+    in_features = encoder.out_features
 
     device_obj = torch.device(device if torch.cuda.is_available() else "cpu")
 
@@ -141,7 +141,16 @@ def train(
     out_dir.mkdir(exist_ok=True)
     out_path = out_dir / f"{dataset_name}.pt"
 
-    torch.save(model.state_dict(), out_path)
+    # save model state dict, dataset name, in and out channels
+    torch.save(
+        {
+            "model_state": model.state_dict(),
+            "in_features": in_features,
+            "out_classes": out_classes,
+            "dataset_name": dataset_name
+        },
+        out_path,
+    )
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()

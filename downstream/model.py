@@ -14,30 +14,34 @@ class CoolProjectionHead(nn.Module):
     def __init__(self,
                  in_features: int = 768,
                  out_classes: int = 16,
-                 checkpoint_path: str = None):
+                 checkpoint_path: str = None,
+                 encoder = None):
         super().__init__()
 
         # backbone
-        if checkpoint_path is None:
-            # download from hub if no local path provided
-            downloaded_path = hf_hub_download(
-                repo_id="Praneet-P/ethics-multihead-model",
-                filename="checkpoints/shared_encoder_heads.pt"
-            )
-            checkpoint = torch.load(downloaded_path, map_location="cpu")
-
-            self.encoder = SharedEncoderBinaryHeads(
-                input_dim=checkpoint['input_dim'],
-                latent_dim=checkpoint['latent_dim'],
-                tasks=checkpoint['tasks']
-            )
-            self.encoder.load_state_dict(checkpoint["model_state"])
-            in_features = checkpoint['latent_dim']
+        if encoder is not None:
+            self.encoder = encoder
         else:
-            self.encoder = SharedEncoderBinaryHeads(
-                input_dim=in_features,
-                latent_dim=in_features,
-            )
+            if checkpoint_path is None:
+                # download from hub if no local path provided
+                downloaded_path = hf_hub_download(
+                    repo_id="Praneet-P/ethics-multihead-model",
+                    filename="checkpoints/shared_encoder_heads.pt"
+                )
+                checkpoint = torch.load(downloaded_path, map_location="cpu")
+
+                self.encoder = SharedEncoderBinaryHeads(
+                    input_dim=checkpoint['input_dim'],
+                    latent_dim=checkpoint['latent_dim'],
+                    tasks=checkpoint['tasks']
+                )
+                self.encoder.load_state_dict(checkpoint["model_state"])
+                in_features = checkpoint['latent_dim']
+            else:
+                self.encoder = SharedEncoderBinaryHeads(
+                    input_dim=in_features,
+                    latent_dim=in_features,
+                )
 
         # freeze backbone
         for param in self.encoder.parameters():
