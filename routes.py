@@ -136,8 +136,12 @@ async def submit_quiz(
         db.save_quiz_response(user_id, str(item.questionId), item.response_data)
     if not pairs:
         raise HTTPException(status_code=400, detail="No valid responses to submit")
-    new_vector = interfaceMLP.update_personality_after_batch(user_id, pairs)
-    return {"message": "Quiz submitted", "user_id": user_id, "vector_length": len(new_vector)}
+
+    try:
+        new_vector = interfaceMLP.update_personality_after_batch(user_id, pairs)
+        return {"message": "Quiz submitted", "user_id": user_id, "vector_length": len(new_vector), "personality_updated": True}
+    except Exception:
+        return {"message": "Quiz submitted; personality update failed", "user_id": user_id, "vector_length": None, "personality_updated": False}
 
 
 # Diagnostics routes
