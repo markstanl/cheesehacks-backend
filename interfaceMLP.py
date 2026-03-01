@@ -34,55 +34,55 @@ def format_question_response(
 ) -> str:
     """
     Format a question and the user's response into a single string for the MLP.
+    Only the user's response is included; unselected answer choices are not.
+    Pattern: "I respond '...' when asked '...'."
     question_text: the question text
     question_type: 0-6 (single select, multi-select, scale, free text, ranking, yes/no, other)
-    answers: list of answer texts or list of {"id", "text"}
+    answers: list of answer texts or list of {"id", "text"} (used to resolve ids to text; not included in output)
     response: for 0/5 one chosen text or "yes"/"no"; for 1/4 list of texts; for 2 a number; for 3 a string; for 6 any
     """
     answer_texts = _answers_to_texts(answers)
-    answers_phrase = ", ".join(f"'{t}'" for t in answer_texts) if answer_texts else ""
 
     if question_type == 0:
-        # Single select: "When asked, '...', I would choose 'X' of 'A', 'B', 'C'."
-        chosen = response if isinstance(response, str) else answer_texts[response] if isinstance(response, int) else str(response)
-        return f"When asked, '{question_text}', I would choose '{chosen}' of {answers_phrase}."
+        # Single select: "I respond 'X' when asked '...'."
+        chosen = response if isinstance(response, str) else answer_texts[response] if isinstance(response, int) and response < len(answer_texts) else str(response)
+        return f"I respond '{chosen}' when asked '{question_text}'."
 
     if question_type == 1:
-        # Multi-select: "When asked, '...', I would choose 'X', 'Y' of 'A', 'B', 'C'."
+        # Multi-select: "I respond 'A', 'B' when asked '...'."
         if isinstance(response, list):
-            chosen = [r if isinstance(r, str) else answer_texts[r] if isinstance(r, int) else str(r) for r in response]
+            chosen = [r if isinstance(r, str) else answer_texts[r] if isinstance(r, int) and r < len(answer_texts) else str(r) for r in response]
         else:
             chosen = [str(response)]
         chosen_phrase = ", ".join(f"'{c}'" for c in chosen)
-        return f"When asked, '{question_text}', I would choose {chosen_phrase} of {answers_phrase}."
+        return f"I respond {chosen_phrase} when asked '{question_text}'."
 
     if question_type == 2:
-        # Scale: "When asked, '...', I answered with scale value N."
-        return f"When asked, '{question_text}', I answered with scale value {response}."
+        # Scale: "I respond 'N' when asked '...'."
+        return f"I respond '{response}' when asked '{question_text}'."
 
     if question_type == 3:
-        # Free text: "When asked, '...', I said '...'."
-        return f"When asked, '{question_text}', I said '{response}'."
+        # Free text: "I respond '...' when asked '...'."
+        return f"I respond '{response}' when asked '{question_text}'."
 
     if question_type == 4:
-        # Ranking: "When asked, '...', I ranked: first 'X', then 'Y', then 'Z'."
+        # Ranking: "I respond 'X', 'Y', 'Z' when asked '...'." (order = rank)
         if isinstance(response, list):
-            ranked = [r if isinstance(r, str) else answer_texts[r] if isinstance(r, int) else str(r) for r in response]
+            ranked = [r if isinstance(r, str) else answer_texts[r] if isinstance(r, int) and r < len(answer_texts) else str(r) for r in response]
         else:
             ranked = [str(response)]
-        rank_phrase = ", then ".join(f"'{r}'" for r in ranked)
-        return f"When asked, '{question_text}', I ranked: {rank_phrase}."
+        rank_phrase = ", ".join(f"'{r}'" for r in ranked)
+        return f"I respond {rank_phrase} when asked '{question_text}'."
 
     if question_type == 5:
-        # Yes/no: "When asked, '...', I said yes/no."
+        # Yes/no: "I respond 'yes' when asked '...'."
         yes_no = "yes" if response in (True, "yes", "y", 1) else "no"
-        return f"When asked, '{question_text}', I said {yes_no}."
+        return f"I respond '{yes_no}' when asked '{question_text}'."
 
     if question_type == 6:
-        # Other: generic
-        return f"When asked, '{question_text}', I responded: {response}."
+        return f"I respond '{response}' when asked '{question_text}'."
 
-    return f"When asked, '{question_text}', I responded: {response}."
+    return f"I respond '{response}' when asked '{question_text}'."
 
 
 def _call_mlp(personality_vector: list[float], response_strings: list[str]) -> list[float]:

@@ -52,8 +52,14 @@ class SendResponseBody(BaseModel):
     response_data: dict[str, Any]  # e.g. {"selected_ids": [0, 2]} for multi-select
 
 
+class QuizResponseItem(BaseModel):
+    questionId: int
+    response_data: dict[str, Any]  # { selected_ids: [int] } | { ranked_ids: [int] } | { text: str }
+
+
 class SubmitQuizBody(BaseModel):
-    personality_vector: list[float]  # Will be serialized to bytes for BLOB storage
+    """Batch of quiz responses: format each, send to MLP, update personality vector."""
+    responses: list[QuizResponseItem]
 
 
 class UpdateSettingsBody(BaseModel):
@@ -153,18 +159,48 @@ async def send_response(
     return {"message": "Response received", "question_id": body.question_id}
 
 
+def _response_data_to_answer(response_data: dict, question_type: int) -> Any:
+    """Map client response_data (selected_ids, ranked_ids, text) to format_question_response response."""
+    if "text" in response_data:
+        return response_data["text"]
+    if "ranked_ids" in response_data:
+        return response_data["ranked_ids"]  # list of ids (order = rank)
+    sel = response_data.get("selected_ids") or []
+    if question_type == 0:
+        return sel[0] if sel else None  # single id
+    if question_type in (1, 2):
+        return sel  # list of ids (multi-select or scale as single choice)
+    if question_type == 5:
+        return sel[0] if sel else None  # yes/no index
+    return sel[0] if sel else None
+
+
 @quiz_router.post("/submit")
 async def submit_quiz(
     body: SubmitQuizBody,
     user_id: str = Depends(get_current_user_id),
 ):
-    """Submit quiz and store personality vector in user profile."""
-    import struct
-    vector_bytes = struct.pack(f"{len(body.personality_vector)}d", *body.personality_vector)
-    ok = db.update_personality_vector(user_id, vector_bytes)
-    if not ok:
-        raise HTTPException(status_code=404, detail="User not found")
-    return {"message": "Quiz submitted", "user_id": user_id}
+    """Submit batch of quiz responses: format each, send to MLP, update personality vector."""
+    import interfaceMLP
+    pairs = []
+    for item in body.responses:
+        q = db.get_question_to_return(item.questionId) or db.get_cached_question(item.questionId)
+        if not q:
+            raise HTTPException(status_code=404, detail=f"Question {item.questionId} not found")
+        response = _response_data_to_answer(item.response_data, q["question_type"])
+        if response is None and "text" not in item.response_data:
+            continue
+        pairs.append({
+            "question_text": q["question"]["text"],
+            "question_type": q["question_type"],
+            "answers": q.get("answers") or [],
+            "response": response,
+        })
+        db.save_quiz_response(user_id, str(item.questionId), item.response_data)
+    if not pairs:
+        raise HTTPException(status_code=400, detail="No valid responses to submit")
+    new_vector = interfaceMLP.update_personality_after_batch(user_id, pairs)
+    return {"message": "Quiz submitted", "user_id": user_id, "vector_length": len(new_vector)}
 
 
 # Diagnostics routes
