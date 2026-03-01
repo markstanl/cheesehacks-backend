@@ -14,7 +14,10 @@ class MoralFoundation(Dataset):
             dataset_path: str = 'USC-MOLA-Lab/MFRC',
             split: str = 'train'
     ):
-        self.data = load_dataset(dataset_path, split=split)
+        full_data = load_dataset(dataset_path, split=split)
+
+        self.data = full_data.shuffle(seed=42).select(
+            range(int(len(full_data) * 0.1)))
 
         texts = [str(text) for text in self.data['text']]
         labels = self.data['annotation']

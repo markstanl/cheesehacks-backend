@@ -32,9 +32,19 @@ def load_classification_model(dataset_name) -> CoolProjectionHead:
     model.eval()
     return model
 
+
+@torch.no_grad()
+def _classify_pv(model, personality_vector, labels):
+    logits = bigfive(personality_vector)
+    label_idx = torch.argmax(logits, dim=-1).item()
+    return starsign_labels[label_idx]
+
 bigfive = load_classification_model('bigfive')
 briggs = load_classification_model('briggs')
+moralfoundation = load_classification_model('moralfoundation')
+politicalleaning = load_classification_model('politicalleaning')
+starsign = load_classification_model('starsign')
 
 
 def _classify_pv(personality_vector):
-    pass
+    big_five = _classify_pv(bigfive, personality_vector, )

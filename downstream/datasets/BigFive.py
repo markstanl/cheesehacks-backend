@@ -13,7 +13,10 @@ class BigFive(Dataset):
             dataset_path: str = 'cajcodes/political-bias',
             split: str = 'train'
     ):
-        self.data = load_dataset(dataset_path, split=split)
+        full_data = load_dataset(dataset_path, split=split)
+
+        self.data = full_data.shuffle(seed=42).select(
+            range(int(len(full_data) * 0.1)))
 
         texts = [str(text) for text in self.data['description']]
         labels = self.data['trait']

@@ -67,7 +67,7 @@ def train(
     else:
         raise ValueError(f"Unsupported dataset: {dataset_name}")
 
-    in_features = encoder.out_features
+    in_features = 784
 
     device_obj = torch.device(device if torch.cuda.is_available() else "cpu")
 
