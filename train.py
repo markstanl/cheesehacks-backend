@@ -2,7 +2,7 @@
 import os
 import math
 import argparse
-from typing import Dict, List, Tuple
+from typing import Dict, List, Tuple, Optional
 
 import torch
 import torch.nn as nn
@@ -10,33 +10,70 @@ from torch.utils.data import Dataset, DataLoader
 
 from datasets import load_from_disk
 
-from model import SharedEncoderBinaryHeads   
-
+from model import SharedEncoderBinaryHeads
 
 
 # ---- Dataset wrapper ----
 class EthicsEmbDataset(Dataset):
     """
-    Expects HuggingFace dataset with columns:
+    Expects a HuggingFace split with at least:
       - "embedding": list[float] length D
-      - "label": binary (0/1 or False/True)
+      - "label": binary (0/1, False/True, or "0"/"1")
+    Can also contain:
+      - "scenario": str (ignored by default)
     """
-    def __init__(self, hf_split):
+    def __init__(self, hf_split, require_cols: Optional[List[str]] = None):
         self.ds = hf_split
+        self.require_cols = require_cols or ["embedding", "label"]
+
+        cols = set(self.ds.column_names)
+        missing = [c for c in self.require_cols if c not in cols]
+        if missing:
+            raise ValueError(
+                f"Dataset split is missing required columns {missing}. "
+                f"Has columns: {self.ds.column_names}"
+            )
 
     def __len__(self) -> int:
         return len(self.ds)
 
     def __getitem__(self, idx: int) -> Tuple[torch.Tensor, torch.Tensor]:
         row = self.ds[idx]
-        x = torch.tensor(row["embedding"], dtype=torch.float32)  # [D]
-        # label may be bool/int
-        y = torch.tensor(float(row["label"]), dtype=torch.float32)  # []
+
+        emb = row["embedding"]
+        if not isinstance(emb, (list, tuple)):
+            raise TypeError(f"Expected 'embedding' to be list/tuple, got {type(emb)} at idx={idx}")
+
+        x = torch.tensor(emb, dtype=torch.float32)  # [D]
+
+        lab = row["label"]
+        # robust conversion: bool/int/float/str
+        if isinstance(lab, bool):
+            y_val = 1.0 if lab else 0.0
+        elif isinstance(lab, (int, float)):
+            y_val = float(lab)
+        elif isinstance(lab, str):
+            y_val = float(int(lab.strip()))
+        else:
+            raise TypeError(f"Unsupported label type {type(lab)} at idx={idx}: {lab}")
+
+        # clamp just in case (prevents weird 2/ -1 values from crashing accuracy calc)
+        y_val = 1.0 if y_val >= 0.5 else 0.0
+
+        y = torch.tensor(y_val, dtype=torch.float32)  # []
         return x, y
 
-def get_model(input_dim: int, latent_dim: int, tasks: List[str], dropout: float) -> nn.Module:
 
-    return SharedEncoderBinaryHeads(input_dim=input_dim, latent_dim=latent_dim, tasks=tasks, dropout=dropout)
+def get_split_for_eval(ds_dict):
+    """
+    Pick the best eval split available.
+    Prefer 'test', else 'validation', else None.
+    """
+    if "test" in ds_dict:
+        return "test"
+    if "validation" in ds_dict:
+        return "validation"
+    return None
 
 
 # ---- Train / Eval helpers ----
@@ -50,8 +87,8 @@ def eval_task(model: nn.Module, loader: DataLoader, task: str, device: torch.dev
     correct = 0
 
     for x, y in loader:
-        x = x.to(device)
-        y = y.to(device)
+        x = x.to(device, non_blocking=True)
+        y = y.to(device, non_blocking=True)
 
         logits = model(x, task).squeeze(-1)  # [B]
         loss = bce(logits, y)
@@ -92,8 +129,8 @@ def train_epoch_grouped_by_task(
         correct = 0
 
         for x, y in loader:
-            x = x.to(device)
-            y = y.to(device)
+            x = x.to(device, non_blocking=True)
+            y = y.to(device, non_blocking=True)
 
             optimizer.zero_grad(set_to_none=True)
             logits = model(x, task).squeeze(-1)  # [B]
@@ -146,9 +183,8 @@ def main():
     torch.manual_seed(args.seed)
     device = torch.device(args.device)
 
-    # Load datasets saved by save_embeddings.py (e.g., data/ethics_deontology_with_embeddings) :contentReference[oaicite:2]{index=2}
     train_loaders: Dict[str, DataLoader] = {}
-    test_loaders: Dict[str, DataLoader] = {}
+    eval_loaders: Dict[str, DataLoader] = {}
 
     input_dim = None
 
@@ -156,13 +192,29 @@ def main():
         path = os.path.join(args.data_dir, f"ethics_{task}_with_embeddings")
         if not os.path.exists(path):
             raise FileNotFoundError(
-                f"Missing dataset at {path}. "
-                f"Run save_embeddings.py first to create it."
+                f"Missing dataset at {path}. Run save_embeddings.py first to create it."
             )
 
         ds = load_from_disk(path)
-        if "train" not in ds or "test" not in ds:
-            raise ValueError(f"{path} must contain train and test splits.")
+
+        if "train" not in ds:
+            raise ValueError(f"{path} must contain a 'train' split. Found splits: {list(ds.keys())}")
+
+        eval_split = get_split_for_eval(ds)
+        if eval_split is None:
+            raise ValueError(
+                f"{path} has no 'test' or 'validation' split. Found splits: {list(ds.keys())}"
+            )
+
+        # ----- schema sanity check -----
+        train_cols = ds["train"].column_names
+        eval_cols = ds[eval_split].column_names
+        for split_name, cols in [("train", train_cols), (eval_split, eval_cols)]:
+            if "embedding" not in cols or "label" not in cols:
+                raise ValueError(
+                    f"{path}/{split_name} missing 'embedding' or 'label'. "
+                    f"Columns: {cols}"
+                )
 
         # Determine embedding dimension from first element
         if input_dim is None:
@@ -170,7 +222,7 @@ def main():
             input_dim = len(first)
 
         train_ds = EthicsEmbDataset(ds["train"])
-        test_ds = EthicsEmbDataset(ds["test"])
+        eval_ds = EthicsEmbDataset(ds[eval_split])
 
         train_loaders[task] = DataLoader(
             train_ds,
@@ -180,8 +232,8 @@ def main():
             pin_memory=(device.type == "cuda"),
             drop_last=False,
         )
-        test_loaders[task] = DataLoader(
-            test_ds,
+        eval_loaders[task] = DataLoader(
+            eval_ds,
             batch_size=args.batch_size,
             shuffle=False,
             num_workers=args.num_workers,
@@ -189,17 +241,24 @@ def main():
             drop_last=False,
         )
 
+        print(f"[{task}] splits: {list(ds.keys())} | train cols: {train_cols} | eval split: {eval_split}")
+
     assert input_dim is not None
-    model = SharedEncoderBinaryHeads(input_dim=input_dim, latent_dim=args.latent_dim, tasks=args.tasks, dropout=args.dropout).to(device)
+    model = SharedEncoderBinaryHeads(
+        input_dim=input_dim,
+        latent_dim=args.latent_dim,
+        tasks=args.tasks,
+        dropout=args.dropout,
+    ).to(device)
 
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
 
     os.makedirs(os.path.dirname(args.save_path), exist_ok=True)
 
-    print(f"Device: {device}")
+    print(f"\nDevice: {device}")
     print(f"Tasks: {args.tasks}")
     print(f"Input dim: {input_dim}, latent dim: {args.latent_dim}")
-    print(f"Training is grouped in task-batches each epoch (one task at a time).")
+    print("Training is grouped in task-batches each epoch (one task at a time).")
 
     best_avg_acc = -math.inf
 
@@ -212,8 +271,7 @@ def main():
             grad_clip=args.grad_clip,
         )
 
-        # Evaluate each task
-        eval_stats = {t: eval_task(model, test_loaders[t], t, device) for t in args.tasks}
+        eval_stats = {t: eval_task(model, eval_loaders[t], t, device) for t in args.tasks}
         avg_acc = sum(eval_stats[t]["acc"] for t in args.tasks) / len(args.tasks)
 
         print(f"\nEpoch {epoch}/{args.epochs}")
@@ -223,11 +281,10 @@ def main():
             print(
                 f"  [{t:14s}] "
                 f"train loss {tr['loss']:.4f} acc {tr['acc']:.3f} | "
-                f"test loss {ev['loss']:.4f} acc {ev['acc']:.3f}"
+                f"eval  loss {ev['loss']:.4f} acc {ev['acc']:.3f}"
             )
-        print(f"  avg test acc: {avg_acc:.3f}")
+        print(f"  avg eval acc: {avg_acc:.3f}")
 
-        # Save best checkpoint
         if avg_acc > best_avg_acc:
             best_avg_acc = avg_acc
             torch.save(

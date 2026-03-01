@@ -1,8 +1,8 @@
 import torch
 import torch.nn as nn
 
-class SharedEncoderBinaryHeadsPatched(nn.Module):
-    def __init__(self, input_dim: int, latent_dim: int, tasks: List[str], dropout: float = 0.1):
+class SharedEncoderBinaryHeads(nn.Module):
+    def __init__(self, input_dim: int, latent_dim: int, tasks: list[str], dropout: float = 0.1):
         super().__init__()
         self.encoder = nn.Sequential(
             nn.Linear(input_dim, latent_dim),
