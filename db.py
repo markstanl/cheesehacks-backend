@@ -57,31 +57,69 @@ def ensure_schema() -> None:
     """
     Create database and tables if they don't exist (e.g. on first Cloud Run deploy).
     Idempotent: safe to call on every startup. Reads schema.sql next to this file.
+    Tries connecting to the DB first (Cloud SQL users often can't CREATE DATABASE); if that fails, tries creating it.
     """
     if mysql is None:
         return
-    cfg = get_connection_config()
-    # Connect without database first so we can run CREATE DATABASE
-    cfg_no_db = {k: v for k, v in cfg.items() if k != "database"}
     schema_path = Path(__file__).resolve().parent / "schema.sql"
     if not schema_path.exists():
         return
     sql = schema_path.read_text(encoding="utf-8", errors="replace")
-    statements = [
+    raw_statements = [
         s.strip() for s in sql.split(";")
         if s.strip() and not s.strip().startswith("--")
     ]
-    conn = mysql.connector.connect(**cfg_no_db)
-    try:
+    cfg = get_connection_config()
+    db_name = cfg.get("database", "align")
+
+    def run_statements(conn, statements_to_run):
         cur = conn.cursor()
-        for stmt in statements:
+        for stmt in statements_to_run:
             if not stmt:
                 continue
             try:
                 cur.execute(stmt)
             except MySQLError as e:
-                # Ignore "already exists" / duplicate; re-raise others
                 if e.errno not in (1007, 1050):  # DB exists, table exists
+                    raise
+        conn.commit()
+        cur.close()
+
+    # Only CREATE TABLE / ALTER TABLE (so we don't need CREATE DATABASE privilege when DB already exists)
+    table_statements = [
+        s for s in raw_statements
+        if s.upper().startswith("CREATE TABLE") or s.upper().startswith("ALTER TABLE")
+    ]
+
+    # 1) Try connecting with database=align and run CREATE TABLEs only
+    try:
+        conn = mysql.connector.connect(**cfg)
+        try:
+            run_statements(conn, table_statements)
+            return
+        finally:
+            conn.close()
+    except MySQLError as e:
+        if e.errno != 1049:  # Unknown database
+            raise
+    # 2) Database doesn't exist: connect without database, create it, then run all statements
+    cfg_no_db = {k: v for k, v in cfg.items() if k != "database"}
+    conn = mysql.connector.connect(**cfg_no_db)
+    try:
+        cur = conn.cursor()
+        try:
+            cur.execute("CREATE DATABASE IF NOT EXISTS `{}`".format(db_name.replace("`", "``")))
+        except MySQLError as e:
+            if e.errno not in (1007, 1044):
+                raise
+        cur.execute("USE `{}`".format(db_name.replace("`", "``")))
+        for stmt in raw_statements:
+            if not stmt or stmt.upper().startswith("CREATE DATABASE") or stmt.upper().startswith("USE "):
+                continue
+            try:
+                cur.execute(stmt)
+            except MySQLError as e:
+                if e.errno not in (1007, 1050):
                     raise
         conn.commit()
         cur.close()

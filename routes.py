@@ -1,3 +1,4 @@
+from contextlib import asynccontextmanager
 from fastapi import APIRouter, FastAPI, Header, HTTPException, Depends, Query
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
@@ -302,19 +303,20 @@ async def update_characteristics(
 
 
 # Main
-app = FastAPI(title="Align", description="Quiz, profile, and diagnostics API.")
-app.include_router(quiz_router)
-app.include_router(diagnostics_router)
-app.include_router(profile_router)
-
-
-@app.on_event("startup")
-def startup_ensure_schema():
-    """Create database and tables if missing (e.g. first Cloud Run deploy)."""
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Startup: ensure DB and tables exist. Shutdown: (none)."""
     try:
         db.ensure_schema()
     except Exception:
-        pass  # Don't block startup; first request may still get 503 if DB unreachable
+        pass
+    yield
+
+
+app = FastAPI(title="Align", description="Quiz, profile, and diagnostics API.", lifespan=lifespan)
+app.include_router(quiz_router)
+app.include_router(diagnostics_router)
+app.include_router(profile_router)
 
 
 def _handle_mysql_unavailable(request, exc):
